@@ -29,6 +29,9 @@ let package = Package(
                 .landscapeRight,
                 .landscapeLeft,
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
+            ],
+            capabilities: [
+                .localNetwork(purposeString: "Connect to a web-server running on the local network", bonjourServiceTypes: [])
             ]
         )
     ],
