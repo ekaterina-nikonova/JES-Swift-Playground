@@ -169,7 +169,7 @@ struct GenerateResponse: Codable {
 
 func sendTopic(_ topic: String,
                completion: @escaping (Result<GenerateResponse, Error>) -> Void) {
-    guard let url = URL(string: "http://192.168.84.40:8000/generate-testz") else {
+    guard let url = URL(string: "http://192.168.84.40:8000/generate-test") else {
         return
     }
     
@@ -218,9 +218,115 @@ func sendTopic(_ topic: String,
     }.resume()
 }
 
+// Submit an answer
+
+struct MultipartFormData {
+    let boundary: String = "Boundary-\(UUID().uuidString)"
+    private var body = Data()
+    
+    mutating func addField(name: String, value: String) {
+        var field = ""
+        field += "--\(boundary)\r\n"
+        field += "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
+        field += "\(value)\r\n"
+        body.append(field.data(using: .utf8)!)
+    }
+    
+    mutating func addFileField(name: String,
+                               filename: String,
+                               mimeType: String,
+                               fileData: Data) {
+        var field = ""
+        field += "--\(boundary)\r\n"
+        field += "Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n"
+        field += "Content-Type: \(mimeType)\r\n\r\n"
+        body.append(field.data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+    }
+    
+    mutating func finalize() {
+        let closing = "--\(boundary)--\r\n"
+        body.append(closing.data(using: .utf8)!)
+    }
+    
+    func httpBody() -> Data { body }
+}
+
+func submitAnswer(text: String,
+                  question: String,
+                  handwritingPNGURL: URL,
+                  audioWAVURL: URL,
+                  completion: @escaping (Result<String, Error>) -> Void) {
+    guard let url = URL(string: "http://192.168.84.40:8000/submit-answer") else {
+        return
+    }
+    
+    guard
+        let pngData = try? Data(contentsOf: handwritingPNGURL),
+        let wavData = try? Data(contentsOf: audioWAVURL)
+    else {
+        completion(.failure(NSError(domain: "JES",
+                                    code: -2,
+                                    userInfo: [NSLocalizedDescriptionKey: "Could not read files"])))
+        return
+    }
+    
+    var multipart = MultipartFormData()
+    multipart.addField(name: "text", value: text)
+    multipart.addField(name: "question", value: question)
+    multipart.addFileField(name: "handwriting",
+                           filename: "handwriting.png",
+                           mimeType: "image/png",
+                           fileData: pngData)
+    multipart.addFileField(name: "audio",
+                           filename: "handwriting.wav",
+                           mimeType: "audio/wav",
+                           fileData: wavData)
+    multipart.finalize()
+    
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("multipart/form-data; boundary=\(multipart.boundary)",
+                     forHTTPHeaderField: "Content-Type")
+    request.httpBody = multipart.httpBody()
+    
+    URLSession.shared.dataTask(with: request) { data, response, error in
+        if let error = error {
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+        
+        // Collect the feedback from the response
+        guard let data = data,
+              let feedback = String(data: data, encoding: .utf8) else {
+            DispatchQueue.main.async {
+                completion(.failure(
+                    NSError(domain: "JES",
+                            code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "No feedback text"])
+                ))
+            }
+            return
+        }
+        
+        // Optionally inspect status code / response JSON here
+        DispatchQueue.main.async { completion(.success(feedback)) }
+    }.resume()
+}
+
 
 
 struct ContentView: View {
+    @State private var cannedText: String = "今日は母の誕生日です。誕生日、おめでとうございます。お母さんは四十五歳ぐらいの歳です。家族といるとしあわせです。母が来ました。ただいま。昨日母に電話しました。お母さんから手紙が来ました。けいたいでしゃしんをとります。あたらし いけいたいはおおきいです。けいたいででんわをします。家族と一緒にいます。来週、母の誕生日パーティーがあります。こうがいでさんぽします。こうがいはとおいけど、たのしいです。お母さんが作ったとろとろのオムライスを食べました。おべんとうを一 つください。おべんとう、あたためましょうか。おさけはあまいです。くすりはにがいです。お母さんは何もしませんでした。今日はさいあくの日でした。今日はダメじゃないです。せいせきがいいので、うれしいです。小さいとき、お母さんはしんせつでした 。あたらしいゆびわをあげます。お母さんはうれしそうです。姉はえいごがとくいです。姉が一人います。先週の誕生日に、姉がおごりでケーキを買いました。姉はえをかくのが上手です。えをかくのはたのしいです。七日は私の誕生日です。二十日は友達の誕 生日です。九日は友達の誕生日です。昨日は友達の誕生日でした。お母さんはおいくつですか。四十五歳です。おおみそかは家族と一緒にいます。かいしゃにいくまえに、でんきをあけます。すわります。おこりました。今日は手がベタベタです。じこはきらい です。かわいいみみがあります。うさぎを愛します。しんぷはしんせつなので、みんながすきです。しんぷはしんせつです。あたまがいいです。やっつ の子供がいます。あかちゃんのとき、よくねました。きれいなけっこんしきでした。しょうしょうおまちください。ゆびわをあげます。今日、よやくを入れます。こわれます。へんにちは休みです。お母さんはいつも優しいです。家族みんなでお祝いします。お母さん、ありがとうございます。"
+    
+    @State private var cannedGeneratedQuestions: [String] = [
+        "今日は**お母さん**の**誕生日**ですか。",
+        "お母さん は**何歳**ぐらいですか。",
+        "**姉**は何が**とくい**ですか。",
+        "**七日**は**誰**の**誕生日**ですか。"
+    ]
+
     @State private var handwritingDrawing = PKDrawing()
     @State private var previewImage: UIImage?
     @State private var topicText: String = ""
@@ -239,6 +345,13 @@ struct ContentView: View {
     @State private var selectedQuestionIndex: Int? = nil
     @State private var isLoadingTopic = false 
     @State private var topicErrorMessage: String? = nil
+
+    // Submit answer    
+    @State private var isSubmittingAnswer = false
+    @State private var submitErrorMessage: String? = nil
+    @State private var submitSuccessMessage: String? = nil
+    @State private var submitFeedback: String? = nil
+
     
     var body: some View {
         ScrollView {
@@ -263,6 +376,9 @@ struct ContentView: View {
                         topicErrorMessage = nil
                         generatedText = ""
                         generatedQuestions = []
+                        
+                        generatedText = cannedText
+                        generatedQuestions = cannedGeneratedQuestions
                         
                         sendTopic(trimmed) { result in
                             isLoadingTopic = false
@@ -302,15 +418,14 @@ struct ContentView: View {
                         if let attributed = try? AttributedString(markdown: generatedText) {
                             Text(attributed)
                                 .font(.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
                         } else {
                             Text(generatedText)
                                 .font(.body)
-                        }
-                        
-                        Text(generatedText)
-                            .font(.body)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
+                        }    
                     }
                     .frame(minHeight: 200, maxHeight: 300) // ~10+ lines visible, then scroll
                     .background(Color(.systemGray6))
@@ -331,8 +446,15 @@ struct ContentView: View {
                             } label: {
                                 HStack(alignment: .top, spacing: 8) {
                                     Text("•")
-                                    Text(question)
-                                        .multilineTextAlignment(.leading)
+                                    
+                                    // Markdown rendering for the question
+                                    if let attributed = try? AttributedString(markdown: question) {
+                                        Text(attributed)
+                                            .multilineTextAlignment(.leading)
+                                    } else {
+                                        Text(question)
+                                            .multilineTextAlignment(.leading)
+                                    }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
@@ -349,70 +471,142 @@ struct ContentView: View {
                     .padding(.top, 4)
                 }
                 
-                Text("Write the answer below:")
-                    .font(.headline)
-                
-                HandwritingCanvas(drawing: $handwritingDrawing)
-                    .frame(height: 300)
-                    .background(Color.white)
-                    .cornerRadius(10)
-                    .padding()
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2))
-                
-                // Export Button (saves as PNG)
-                Button("Export as PNG") {
-                    let bounds = handwritingDrawing.bounds.insetBy(dx: -10, dy: -10)
-                    if !handwritingDrawing.strokes.isEmpty {
-                        let image = handwritingDrawing.image(from: bounds,
-                                                             scale: UIScreen.main.scale)
-                        let fileURL = saveHandwritingImage(image)
-                        
-                        // Suggest to export the PNG file
-                        previewImage = image
-                        imageToShareURL = fileURL
-                        isShowingShareSheet = true
-                        
-                        // TODO: Upload image.pngData() to server later
-                    } else {
-                        print("No strokes to export")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(handwritingDrawing.strokes.isEmpty)
-                
-                // Clear Button
-                Button("Clear") {
-                    handwritingDrawing = PKDrawing()
-                }
-                
-                // Audio
-                // Audio recording section
-                Text("Record your spoken answer:")
-                    .font(.headline)
-                    .padding(.top)
-                
-                HStack {
-                    Button(audioRecorder.isRecording ? "Stop Recording" : "Start Recording") {
-                        if audioRecorder.isRecording {
-                            audioRecorder.stopRecording()
+                if (selectedQuestionIndex != nil) {
+                    Text("Write the answer below:")
+                        .font(.headline)
+                    
+                    HandwritingCanvas(drawing: $handwritingDrawing)
+                        .frame(height: 300)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                        .padding()
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2))
+                    // Export Button (saves as PNG)
+                    Button("Export as PNG") {
+                        let bounds = handwritingDrawing.bounds.insetBy(dx: -10, dy: -10)
+                        if !handwritingDrawing.strokes.isEmpty {
+                            let image = handwritingDrawing.image(from: bounds,
+                                                                 scale: UIScreen.main.scale)
+                            let fileURL = saveHandwritingImage(image)
+                            
+                            // Suggest to export the PNG file
+                            previewImage = image
+                            imageToShareURL = fileURL
+                            isShowingShareSheet = true
+                            
+                            // TODO: Upload image.pngData() to server later
                         } else {
-                            audioRecorder.startRecording()
+                            print("No strokes to export")
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(handwritingDrawing.strokes.isEmpty)
                     
-                    Button("Export WAV") {
-                        if let url = audioRecorder.recordedFileURL {
-                            audioToShareURL = url
-                            isShowingAudioShareSheet = true
-                        } else {
-                            print("No recording to export")
+                    // Clear Button
+                    Button("Clear") {
+                        handwritingDrawing = PKDrawing()
+                    }
+                    
+                    // Audio
+                    // Audio recording section
+                    Text("Record your spoken answer:")
+                        .font(.headline)
+                        .padding(.top)
+                    
+                    
+                    HStack {
+                        Button(audioRecorder.isRecording ? "Stop Recording" : "Start Recording") {
+                            if audioRecorder.isRecording {
+                                audioRecorder.stopRecording()
+                            } else {
+                                audioRecorder.startRecording()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        
+                        Button("Export WAV") {
+                            if let url = audioRecorder.recordedFileURL {
+                                audioToShareURL = url
+                                isShowingAudioShareSheet = true
+                            } else {
+                                print("No recording to export")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(audioRecorder.recordedFileURL == nil)
+                    }
+                    
+                    if let selectedIndex = selectedQuestionIndex {
+                        Button("Submit Answer") {
+                            guard
+                                !generatedText.isEmpty,
+                                generatedQuestions.indices.contains(selectedIndex),
+                                let pngURL = imageToShareURL,            // from Export as PNG
+                                let wavURL = audioRecorder.recordedFileURL
+                            else {
+                                submitErrorMessage = "Missing text, question, PNG, or WAV."
+                                return
+                            }
+                            
+                            isSubmittingAnswer = true
+                            submitErrorMessage = nil
+                            submitSuccessMessage = nil
+                            
+                            let question = generatedQuestions[selectedIndex]
+                            
+                            submitAnswer(text: generatedText,
+                                         question: question,
+                                         handwritingPNGURL: pngURL,
+                                         audioWAVURL: wavURL) { result in
+                                isSubmittingAnswer = false
+                                switch result {
+                                case .success(let feedbackText):
+                                    submitSuccessMessage = "Answer submitted successfully."
+                                    submitFeedback = feedbackText // store server feedback
+                                case .failure(let error):
+                                    submitErrorMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top)
+                        .disabled(isSubmittingAnswer || imageToShareURL == nil || audioRecorder.recordedFileURL == nil)
+                        
+                        if isSubmittingAnswer {
+                            ProgressView("Submitting answer…")
+                                .padding(.top, 4)
+                        }
+                        if let msg = submitErrorMessage {
+                            Text("Submit error: \(msg)")
+                                .foregroundColor(.red)
+                                .font(.footnote)
+                                .padding(.top, 4)
+                        }
+                        if let msg = submitSuccessMessage {
+                            Text(msg)
+                                .foregroundColor(.green)
+                                .font(.footnote)
+                                .padding(.top, 4)
+                        }
+                        
+                        // Display feedback
+                        if let feedback = submitFeedback {
+                            Text("Feedback:")
+                                .font(.headline)
+                                .padding(.top, 8)
+                            
+                            ScrollView {
+                                Text(feedback)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                            }
+                            .frame(minHeight: 120, maxHeight: 200)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(audioRecorder.recordedFileURL == nil)
+
                 }
-                
             }
             .padding()
             .sheet(isPresented: $isShowingShareSheet) {
